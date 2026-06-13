@@ -15,11 +15,29 @@ class SceneUnderstanding:
 
         # debug
         return {
-            "forest" : 10,
-            "grassland": 70,
-            "house" : 5, 
-            "road" : 80,
-            "river" : 1
+            # Vegetation
+            "forest": 0,
+            "trees": 0,
+
+            "grass": 30,
+            "field": 30,
+
+            # Roads
+            "paved road": 90,
+            "dirt road": 70,
+            "parking lot": 90,
+
+            # Water
+            "water": 1,
+            "river": 1,
+
+            # Structures
+            "building": 50,
+            "house": 50,
+
+            # Vehicles
+            "vehicle": 100,
+            "car": 100,
         }
 
         # image = cv2.resize(
