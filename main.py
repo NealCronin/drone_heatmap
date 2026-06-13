@@ -1,8 +1,9 @@
 from pathlib import Path
-
 import cv2
 import pandas as pd
 
+from modules.SceneUnderstanding import SceneUnderstanding
+from modules.Heatmap import Heatmap
 
 class DroneHeatmap: 
     def __init__(self, dataset_root: str):
@@ -13,6 +14,9 @@ class DroneHeatmap:
         self.query_images_dir = (self.dataset_root / "query_images")
 
         self.index = 0
+
+        self.scene_understanding = SceneUnderstanding()
+        self.heatmap = Heatmap()
 
     def has_next(self) -> bool:
         return self.index < len(self.query_csv)
@@ -65,18 +69,26 @@ class DroneHeatmap:
             frame = self.get_next_frame()
 
             image = frame["image"]
+            out = image
+
             gps = (
                 frame["easting"],
                 frame["northing"]
             )
+            # print(
+            #     frame["frame_index"],
+            #     gps,
+            #     frame["altitude"]
+            # )
 
-            print(
-                frame["frame_index"],
-                gps,
-                frame["altitude"]
-            )
+            scene_dict = self.scene_understanding.get_labels(image, "Find cars")
+            print(scene_dict)
 
-            self.show_video(image)
+            heatmap = self.heatmap.get(image, scene_dict)
+            if heatmap is not None: out = heatmap
+
+            self.show_video(out)
+        
 
 if __name__ == "__main__":
 
