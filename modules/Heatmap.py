@@ -18,6 +18,7 @@ class Heatmap:
     def __init__(self):
 
         self.regions = []
+        self.heat_gamma = 10.0
 
         overrides = dict(
             conf=0.5,
@@ -87,9 +88,11 @@ class Heatmap:
             mask = region.mask.astype(np.float32)
             score = region.score
 
+            boosted_score = (score / 100) ** self.heat_gamma
+
             heatmap = np.maximum(
                 heatmap,
-                mask * score
+                mask * boosted_score
             )
 
             valid = np.maximum(
@@ -102,6 +105,7 @@ class Heatmap:
         heatmap = cv2.GaussianBlur(heatmap, spread, sigma)
         valid = cv2.GaussianBlur(valid, spread, sigma)
         heatmap = heatmap / (valid + 1e-6)
+        heatmap = np.power(heatmap, 1 / self.heat_gamma) * 100
 
         heatmap = np.clip(heatmap, 0, 100)
         heatmap = (heatmap * 2.55).astype(np.uint8)

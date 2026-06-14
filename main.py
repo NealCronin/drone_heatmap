@@ -8,8 +8,9 @@ from modules.Heatmap import Heatmap
 from scripts.video_output import create_video_writer, release_video_writer
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str, sam_step=15):
+    def __init__(self, dataset_root: str, task="Find cars", sam_step=15):
         self.dataset_root = Path(dataset_root)
+        self.task = task
         self.sam_step = sam_step
         
         self.query_csv = pd.read_csv(self.dataset_root / "query.csv")
@@ -33,35 +34,37 @@ class DroneHeatmap:
         return frame["frame_index"] % self.sam_step == 0
 
     def get_next_frame(self):
-        if not self.has_next():
-            return None
+        while self.has_next():
+            frame_index = self.index
+            row = self.query_csv.iloc[frame_index]
+            self.index += 1
 
-        row = self.query_csv.iloc[self.index]
+            image_path = (self.query_images_dir / row["name"])
+            image = cv2.imread(str(image_path))
 
-        image_path = (self.query_images_dir / row["name"])
+            if image is None:
+                print(f"Skipping unreadable image: {image_path}")
+                continue
 
-        image = cv2.imread(str(image_path))
-        image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
-        image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
+            image[:, :, 1] = (image[:, :, 1] * 0.65).astype(image.dtype)
+            image[:, :, 2:3] = (image[:, :, 2:3] * 0.8).astype(image.dtype)
 
-        frame = {
-            "image": image,
-            "image_path": str(image_path),
-            "easting": row["easting"],
-            "northing": row["northing"],
-            "altitude": row["altitude"],
-            "orientation": (
-                row["orient_x"],
-                row["orient_y"],
-                row["orient_z"],
-                row["orient_w"],
-            ),
-            "frame_index": self.index,
-        }
+            return {
+                "image": image,
+                "image_path": str(image_path),
+                "easting": row["easting"],
+                "northing": row["northing"],
+                "altitude": row["altitude"],
+                "orientation": (
+                    row["orient_x"],
+                    row["orient_y"],
+                    row["orient_z"],
+                    row["orient_w"],
+                ),
+                "frame_index": frame_index,
+            }
 
-        self.index += 1
-
-        return frame
+        return None
     
     def _get_video_writer(self, image):
         if self.video_writer is not None:
@@ -74,7 +77,48 @@ class DroneHeatmap:
         release_video_writer(self.video_writer)
         self.video_writer = None
 
+    def _draw_task_header(self, image):
+        output = image.copy()
+        text = f"Task: {self.task}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.75
+        thickness = 2
+        padding_x = 18
+        padding_y = 12
+
+        (text_width, text_height), baseline = cv2.getTextSize(
+            text,
+            font,
+            scale,
+            thickness
+        )
+
+        header_height = text_height + baseline + padding_y * 2
+        overlay = output.copy()
+        cv2.rectangle(
+            overlay,
+            (0, 0),
+            (output.shape[1], header_height),
+            (0, 0, 0),
+            -1
+        )
+        output = cv2.addWeighted(overlay, 0.45, output, 0.55, 0)
+
+        cv2.putText(
+            output,
+            text,
+            (padding_x, padding_y + text_height),
+            font,
+            scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+
+        return output
+
     def show_video(self, image):
+        image = self._draw_task_header(image)
 
         self._get_video_writer(image).write(image)
 
@@ -88,6 +132,8 @@ class DroneHeatmap:
         if self.has_next():
 
             frame = self.get_next_frame()
+            if frame is None:
+                return
 
             image = frame["image"]
             out = image
@@ -104,7 +150,7 @@ class DroneHeatmap:
 
             scene_dict = None
             if self.should_run_sam(frame):
-                scene_dict = self.scene_understanding.get_labels(image, "Find cars")
+                scene_dict = self.scene_understanding.get_labels(image, self.task)
             # print(scene_dict)
 
             heatmap = self.heatmap.get(image, scene_dict)

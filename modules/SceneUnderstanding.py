@@ -146,7 +146,7 @@ def debug():
 
         "building, house, facility": {
             "label": "building",
-            "score": 50,
+            "score": 80,
         },
 
         "vehicle, car, truck, van, or motorized ground transportation": {
