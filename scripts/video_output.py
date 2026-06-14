@@ -12,7 +12,7 @@ def timestamped_video_path(output_dir="example"):
     return output_dir / f"{timestamp}.mp4"
 
 
-def create_video_writer(image, output_dir="example", fps=30):
+def create_video_writer(image, output_dir="examples", fps=30):
     video_path = timestamped_video_path(output_dir)
 
     height, width = image.shape[:2]

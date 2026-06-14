@@ -2,6 +2,8 @@ from ultralytics.models.sam import SAM3SemanticPredictor
 import numpy as np
 import cv2
 from dataclasses import dataclass
+from scripts.heatmap_helper import merge_similar
+from ultralytics import YOLOWorld
 
 @dataclass
 class Region:
@@ -9,11 +11,13 @@ class Region:
     label: str
     score: float
 
-class Heatmap:
-    def __init__(self, sam_step=15):
+Node = Region
 
-        self.sam_step = sam_step
-        self.frame_idx = 0
+
+class Heatmap:
+    def __init__(self):
+
+        self.regions = []
 
         overrides = dict(
             conf=0.5,
@@ -28,13 +32,17 @@ class Heatmap:
         self.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self.prev_gray = None
 
-    def _parse_dict(self, scene_dict):
-        labels = list(scene_dict.keys())
+        # self.model = YOLOWorld("yolov8x-worldv2.pt")
+        # self.model.set_classes(["forest", "trees", "field", "grass"])
 
-        return labels
-    
+        self.nodes = []
+
+    def _parse_dict(self, scene_dict):
+        prompts = list(scene_dict.keys())
+
+        return prompts
+
     def _get_flow_map(self, curr_image):
-        
         curr_gray = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
 
         flow = self.dis.calc(self.prev_gray, curr_gray, None)
@@ -45,9 +53,10 @@ class Heatmap:
         map_x = (x - flow[..., 0]).astype(np.float32)
         map_y = (y - flow[..., 1]).astype(np.float32)
 
-        self.prev_gray = cv2.cvtColor(curr_image, cv2.COLOR_BGR2GRAY)
+        self.prev_gray = curr_gray
 
         return map_x, map_y
+    
     
     def _create_region(self, mask: np.ndarray, label, score):
         self.regions.append(
@@ -57,6 +66,18 @@ class Heatmap:
                 score=score
             )
         )
+
+    def _create_nodes(self):
+        for region in self.regions:
+            self.nodes.append(
+                Node(
+                    mask=region.mask > 0,
+                    label=region.label,
+                    score=region.score,
+                )
+            )
+
+        self.nodes = merge_similar(self.nodes)
 
     def _create_heatmap(self, image):
         heatmap = np.zeros(image.shape[:2], dtype=np.float32)
@@ -76,8 +97,10 @@ class Heatmap:
                 mask
             )
 
-        heatmap = cv2.GaussianBlur(heatmap, (15, 15), 0)
-        valid = cv2.GaussianBlur(valid, (15, 15), 0)
+        spread = (301, 301)
+        sigma = 0
+        heatmap = cv2.GaussianBlur(heatmap, spread, sigma)
+        valid = cv2.GaussianBlur(valid, spread, sigma)
         heatmap = heatmap / (valid + 1e-6)
 
         heatmap = np.clip(heatmap, 0, 100)
@@ -95,9 +118,38 @@ class Heatmap:
 
         return output
 
-    def get(self, image, scene_dict):
+    def _draw_node_labels(self, image):
+        output = image.copy()
 
-        if self.frame_idx % self.sam_step != 0: # Not sam step
+        for node in self.nodes:
+            mask = node.mask > 0
+            if not np.any(mask):
+                continue
+
+            ys, xs = np.nonzero(mask)
+            x = int(xs.mean())
+            y = int(ys.mean())
+
+            cv2.putText(
+                output,
+                node.label,
+                (x, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (100, 100, 100),
+                2,
+                cv2.LINE_AA,
+            )
+
+        return output
+
+    def get(self, image, scene_dict):
+ 
+        # results = self.model.predict(image)
+        # annotated = results[0].plot()
+        # return annotated
+
+        if scene_dict is None: # Not SAM step
 
             if self.prev_gray is None: return None
 
@@ -113,15 +165,28 @@ class Heatmap:
                     borderValue=0                    # outside-image pixels become background
                 )
 
-        else:
+            for node in self.nodes:
+                node.mask = cv2.remap(
+                    node.mask.astype(np.uint8),
+                    map_x,
+                    map_y,
+                    interpolation=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
+
+        else: # SAM step
             self.prev_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-            labels = self._parse_dict(scene_dict)
+            if scene_dict is None:
+                return None
 
-            if len(labels) < 1:
+            prompts = self._parse_dict(scene_dict)
+
+            if len(prompts) < 1:
                 return None
         
-            results = self.predictor(image, text=labels)
+            results = self.predictor(image, text=prompts)
             if not results: return None
             result = results[0]
 
@@ -130,18 +195,19 @@ class Heatmap:
 
             self.regions = []
             for i in range(len(result.boxes)):
-                label = result.names[int(result.boxes.cls[i])]
+                prompt = result.names[int(result.boxes.cls[i])]
                 mask = masks[i]
-                score = scene_dict[label]
+                score = scene_dict[prompt]["score"]
+                label = scene_dict[prompt]["label"]
 
                 self._create_region(mask, label, score)
 
-            
                 # annotated = result.plot()
                 # return annotated
 
-        self.frame_idx += 1
+            self._create_nodes()
 
         heatmap = self._create_heatmap(image)
+        heatmap = self._draw_node_labels(heatmap)
 
         return heatmap

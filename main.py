@@ -8,8 +8,9 @@ from modules.Heatmap import Heatmap
 from scripts.video_output import create_video_writer, release_video_writer
 
 class DroneHeatmap: 
-    def __init__(self, dataset_root: str):
+    def __init__(self, dataset_root: str, sam_step=15):
         self.dataset_root = Path(dataset_root)
+        self.sam_step = sam_step
         
         self.query_csv = pd.read_csv(self.dataset_root / "query.csv")
 
@@ -27,6 +28,9 @@ class DroneHeatmap:
 
     def reset(self):
         self.index = 0
+
+    def should_run_sam(self, frame):
+        return frame["frame_index"] % self.sam_step == 0
 
     def get_next_frame(self):
         if not self.has_next():
@@ -98,7 +102,9 @@ class DroneHeatmap:
             #     frame["altitude"]
             # )
 
-            scene_dict = self.scene_understanding.get_labels(image, "Find cars")
+            scene_dict = None
+            if self.should_run_sam(frame):
+                scene_dict = self.scene_understanding.get_labels(image, "Find cars")
             # print(scene_dict)
 
             heatmap = self.heatmap.get(image, scene_dict)

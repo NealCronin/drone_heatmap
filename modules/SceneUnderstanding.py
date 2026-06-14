@@ -3,48 +3,72 @@ import cv2
 import numpy as np
 import base64
 import json
-
-import os
+from config.prompts import REASONING_PROMPT, VLM_PROMPT
 
 class SceneUnderstanding:
-    def __init__(self, model="gpt-4.1-mini"):
-        self.model = model
+    def __init__(self):
+        self.model = None
         self.client = OpenAI()
+        self.vocabulary = {}
+        self.vocabulary_alpha = 0.25
+
+    def _vocabulary_labels(self):
+        return sorted(self.vocabulary.keys())
+
+    def _update_vocabulary(self, labels):
+        for label_info in labels.values():
+            label = label_info["label"]
+            score = float(label_info["score"])
+
+            if label not in self.vocabulary:
+                self.vocabulary[label] = score
+            else:
+                previous_score = self.vocabulary[label]
+                self.vocabulary[label] = (
+                    self.vocabulary_alpha * score
+                    + (1 - self.vocabulary_alpha) * previous_score
+                )
+
+    def _loads_json_object(self, text):
+        text = text.strip()
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+
+            if start == -1 or end == -1 or end <= start:
+                raise
+
+            return json.loads(text[start:end + 1])
+
+    def _normalize_labels(self, labels):
+        normalized = {}
+
+        for prompt, label_info in labels.items():
+            if not isinstance(label_info, dict):
+                continue
+
+            if "label" not in label_info or "score" not in label_info:
+                continue
+
+            normalized[prompt] = {
+                "label": str(label_info["label"]),
+                "score": float(label_info["score"]),
+            }
+
+        return normalized
 
     def get_labels(self, image: np.ndarray, task: str):
 
-        # debug
-        return {
-            # Vegetation
-            "forest": 0,
-            "trees": 0,
+        return debug()
 
-            "grass": 30,
-            "field": 30,
-
-            # Roads
-            "paved road": 90,
-            "dirt road": 70,
-            "parking lot": 90,
-
-            # Water
-            "water": 1,
-            "river": 1,
-
-            # Structures
-            "building": 50,
-            "house": 50,
-
-            # Vehicles
-            "vehicle": 100,
-            "car": 100,
-        }
-
-        # image = cv2.resize(
-        #     image,
-        #     (384, 384),
-        #     interpolation=cv2.INTER_AREA
-        # )
+        image = cv2.resize(
+            image,
+            (384, 384),
+            interpolation=cv2.INTER_AREA
+        )
 
         _, buffer = cv2.imencode(".jpg", image)
 
@@ -52,42 +76,18 @@ class SceneUnderstanding:
             buffer
         ).decode("utf-8")
 
-        prompt = f"""
-            Task: {task}
-
-            Analyze the aerial image.
-
-            Identify only visible regions that have a physical location and extent in the image.
-
-            Rules:
-            - Do not detect the task target.
-            - Do not include the task target as a label.
-            - Only include regions that are visibly present.
-            - Every label must correspond to a region that could be spatially localized in the image.
-            - Do not output scene descriptions, attributes, qualities, or abstractions.
-            - Keys must be a single lowercase word.
-            - Values must be relevance scores from 0-100 for accomplishing the task.
-
-            Output requirements:
-            - Return exactly one JSON object.
-            - Return only JSON.
-            - Do not use markdown.
-            - Do not use code fences.
-            - Do not provide explanations.
-            - Do not provide multiple answers.
-            - The first character of the response must be '{{'.
-            - The last character of the response must be '}}'.
-        """
-
+        
+        # Stage 1: VLM Perception
+        
         response = self.client.responses.create(
-            model=self.model,
+            model="gpt-4.1-mini",
             input=[
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "input_text",
-                            "text": prompt,
+                            "text": VLM_PROMPT,
                         },
                         {
                             "type": "input_image",
@@ -97,9 +97,60 @@ class SceneUnderstanding:
                 }
             ],
         )
+        observations = self._loads_json_object(response.output_text)["observations"]
 
-        data = json.loads(response.output_text)
+        # Stage 2: Instruction / Reasoning Model
 
-        print(data)
+        reasoning_prompt = REASONING_PROMPT.format(
+            task=task,
+            observations=json.dumps(observations, indent=2),
+            vocabulary=json.dumps(self._vocabulary_labels(), indent=2),
+        )
 
-        return data
+        response = self.client.responses.create(
+            model="o4-mini",
+            input=reasoning_prompt,
+        )
+
+        labels = self._normalize_labels(
+            self._loads_json_object(response.output_text)
+        )
+
+        self._update_vocabulary(labels)
+
+        print("OBSERVATIONS:")
+        print(observations)
+
+        print("LABELS:")
+        print(labels)
+
+        return labels
+        
+
+def debug():
+    return {
+        "dense forest, woodland, tree canopy, or heavily wooded area": {
+            "label": "trees",
+            "score": 0,
+        },
+
+        "open field, grassland, meadow, pasture, lawn": {
+            "label": "field",
+            "score": 30,
+        },
+
+        "road, street, or highway": {
+            "label": "road",
+            "score": 90,
+        },
+
+        "building, house, facility": {
+            "label": "building",
+            "score": 50,
+        },
+
+        "vehicle, car, truck, van, or motorized ground transportation": {
+            "label": "vehicle",
+            "score": 100,
+        },
+    }
