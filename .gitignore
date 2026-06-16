@@ -1,3 +1,5 @@
 *.pt
 models/
 examples/
+__pycache__/
+*.png
